@@ -1,0 +1,601 @@
+﻿========================================================================
+
+CheckCrack.ps1
+
+Công cụ kiểm tra crack & bản quyền Windows/Office và hiển thị phần cứng
+
+Nhấn ‘H’ để ẩn/hiện Product Key, ‘Q’ hoặc ‘ESC’ để thoát.
+
+========================================================================
+
+Chế độ kiểm thử tự động (mặc định tắt)
+
+$testMode = $false
+
+Thiết lập bảng mã UTF-8 cho console để hiển thị tiếng Việt có dấu
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8 $OutputEncoding
+= [System.Text.Encoding]::UTF8
+
+Clear-Host Write-Host
+“========================================================================”
+-ForegroundColor Gray Write-Host ” ____ _ _ ____ _ ” -ForegroundColor
+Cyan Write-Host ” / | | __ | | / _| __ __ _ | | ” -ForegroundColor Cyan
+Write-Host ” | | | ’  / _ / | |/ / | | ’/ ` |/ | |/ / ” -ForegroundColor
+Cyan Write-Host ” | || | | | / (| <| || | | (| | (| < ” -ForegroundColor
+Cyan Write-Host ” _|| ||_|_||_\_|| _,|___|_|_  ” -ForegroundColor Cyan
+Write-Host ” ” -ForegroundColor Cyan Write-Host ” CÔNG CỤ KIỂM TRA CRACK
+& BẢN QUYỀN WINDOWS/OFFICE v1.0” -ForegroundColor White Write-Host ”
+Developed by Le Minh Khoi” -ForegroundColor White Write-Host
+“========================================================================”
+-ForegroundColor Gray Write-Host “” Write-Host “[*] Đang quét hệ thống
+và thu thập dữ liệu phần cứng/bản quyền. Vui lòng chờ…” -ForegroundColor
+Yellow
+
+========================================================================
+
+1. THU THẬP THÔNG TIN PHẦN CỨNG (HARDWARE INFO)
+
+========================================================================
+
+Mainboard
+
+boardObj = Get − CimInstanceWin32_(B)aseBoard − ErrorActionSilentlyContinuemotherboard
+= “Không xác định” if ($boardObj) {
+$motherboard = "$($boardObj.Manufacturer.Trim())
+(boardObj.Product.Trim())” }
+
+CPU
+
+cpuObj = Get − CimInstanceWin32_(P)rocessor − ErrorActionSilentlyContinuecpuName
+= “Không xác định” cpuCores = 0cpuThreads = 0 if ($cpuObj) { # Lấy tên
+CPU và rút gọn khoảng trắng thừa cpuName = (cpuObj.Name -replace ‘+’, ’
+’).Trim() $cpuCores = $cpuObj.NumberOfCores $cpuThreads =
+$cpuObj.NumberOfLogicalProcessors }
+
+RAM
+
+memDevices = Get − CimInstanceWin32_(P)hysicalMemory − ErrorActionSilentlyContinueramTotalBytes
+= 0 ramSpeed = 0ramSlots = 0 if ($memDevices) { ramSlots = (memDevices |
+Measure-Object).Count foreach ($mem in $memDevices) { $ramTotalBytes +=
+mem.Capacityif(mem.Speed -gt $ramSpeed) { $ramSpeed = $mem.Speed }
+    }
+}$ramTotalGB = [Math]::Round($ramTotalBytes / 1GB, 1)
+
+GPU
+
+gpuDevices = Get − CimInstanceWin32_(V)ideoController − ErrorActionSilentlyContinuegpuNames
+= @() if ($gpuDevices) {
+    foreach ($gpu in $gpuDevices) { $gpuNames += $gpu.Name.Trim()
+    }
+}$gpuStr = if ($gpuNames.Count -gt 0) { $gpuNames -join ” / ” } else {
+“Không xác định” }
+
+Disk Drives (HDD/SSD)
+
+disks = @()disksObj = Get-CimInstance Win32_DiskDrive -ErrorAction
+SilentlyContinue if ($disksObj) {
+    foreach ($disk in $disksObj) { sizeGB = [Math] :  : Round(disk.Size
+/ 1GB, 1) $mediaType = “Unknown” # Thử lấy loại ổ cứng qua
+MSFT_PhysicalDisk (chỉ hỗ trợ từ Win8 trở lên) $pDisk = Get-CimInstance
+-Namespace ROOT/Microsoft/Windows/Storage -ClassName MSFT_PhysicalDisk
+-ErrorAction SilentlyContinue | Where-Object { $.DeviceId -eq
+$disk.Index -or $.FriendlyName -eq $disk.Model }
+        if ($pDisk) { if ($pDisk.MediaType -eq 3) { $mediaType = "HDD" }
+            elseif ($pDisk.MediaType -eq 4) { $mediaType = "SSD" }
+            elseif ($pDisk.MediaType -eq 5) { $mediaType = “SCM” } else
+{ $mediaType = "SSD/HDD" }
+        } else {
+            # Dự phòng nếu không truy vấn được MSFT_PhysicalDisk
+            if ($disk.Model -like “SSD” -or $disk.Model -like “NVMe” -or
+$disk.Model -like “Solid State” -or $disk.Model -like “eMMC”) {
+$mediaType = “SSD” } else { $mediaType = “HDD” } }
+$disks += "$(disk.Model.Trim())(sizeGB GB - $mediaType)"
+    }
+}$diskStr = if ($disks.Count -gt 0) { $disks -join “,” } else { “Không
+xác định” }
+
+========================================================================
+
+2. THU THẬP THÔNG TIN BẢN QUYỀN (LICENSING INFO)
+
+========================================================================
+
+Hệ điều hành Windows
+
+osObj = Get − CimInstanceWin32_(O)peratingSystem − ErrorActionSilentlyContinuewinEdition
+= “Không xác định” if ($osObj) { $winEdition = $osObj.Caption.Trim() }
+
+UEFI BIOS Key
+
+$oemKey = "Không tìm thấy"$oemKeyRaw = (Get-CimInstance
+SoftwareLicensingService -ErrorAction
+SilentlyContinue).OA3xOriginalProductKey if ($oemKeyRaw -and
+$oemKeyRaw.Trim() -ne ““) { $oemKey = $oemKeyRaw.Trim() }
+
+Registry Decoded Product Key (Windows 10/11)
+
+function Get-DecodedRegistryKey { try { $regPath = “HKLM:NT”
+$digitalProductId = (Get-ItemProperty -Path $regPath -Name
+“DigitalProductId” -ErrorAction SilentlyContinue).DigitalProductId if
+(-not $digitalProductId -or $digitalProductId.Count -lt 67) { return
+“Không tìm thấy” }
+
+        $isWin8 = ([System.Math]::Truncate($digitalProductId[66] / 6)) -band 1
+        $digitalProductId[66] = ($digitalProductId[66] -band 0xF7) -bor (($isWin8 -band 2) * 4)
+        
+        $chars = "BCDFGHJKMPQRTVWXY2346789"
+        $keyOffset = 52
+        $productKey = ""
+        $last = 0
+        
+        for ($i = 24; $i -ge 0; $i--) {
+            $current = 0
+            for ($j = 14; $j -ge 0; $j--) {
+                $current = $current * 256
+                $current = $digitalProductId[$j + $keyOffset] + $current
+                $digitalProductId[$j + $keyOffset] = [System.Math]::Truncate($current / 24)
+                $current = $current % 24
+            }
+            $productKey = $chars[$current] + $productKey
+            $last = $current
+        }
+        
+        if ($isWin8 -eq 1) {
+            $keypart1 = $productKey.Substring(1, $last)
+            $keypart2 = $productKey.Substring($last + 1, $productKey.Length - ($last + 1))
+            $productKey = $keypart1 + "N" + $keypart2
+        }
+        
+        # Định dạng key dạng XXXXX-XXXXX-XXXXX-XXXXX-XXXXX
+        $formattedKey = ""
+        for ($i = 0; $i -lt 25; $i++) {
+            $formattedKey += $productKey[$i]
+            if (($i + 1) % 5 -eq 0 -and ($i -ne 24)) {
+                $formattedKey += "-"
+            }
+        }
+        return $formattedKey
+    } catch {
+        return "Không thể giải mã (Registry bị ẩn)"
+    }
+
+} $registryKey = Get-DecodedRegistryKey
+
+Trạng thái kích hoạt và Kênh phân phối Windows
+
+$winStatus = "Không xác định"$winChannel = “Không xác định” $winIsKMS =
+falsewinIsKMS38 = falsewinKmsServer = “” winKmsPort = 0winGraceMinutes =
+0
+
+Truy vấn thông tin kích hoạt Windows từ SoftwareLicensingProduct (ApplicationID của Windows là 55c92734-d682-4d71-983e-d6ec3f16059f)
+
+$winLicObj = Get-CimInstance -ClassName SoftwareLicensingProduct -Filter
+“ApplicationID = ‘55c92734-d682-4d71-983e-d6ec3f16059f’ AND
+PartialProductKey IS NOT NULL” -ErrorAction SilentlyContinue |
+Where-Object { $_.LicenseStatus -eq 1 } if (-not $winLicObj) { # Nếu
+không tìm thấy sản phẩm đã kích hoạt, lấy sản phẩm đầu tiên có key
+$winLicObj = Get-CimInstance -ClassName SoftwareLicensingProduct -Filter
+“ApplicationID = ‘55c92734-d682-4d71-983e-d6ec3f16059f’ AND
+PartialProductKey IS NOT NULL” -ErrorAction SilentlyContinue |
+Select-Object -First 1 }
+
+if ($winLicObj) { # Dịch trạng thái kích hoạt $statusMap = @{ 0 = “Chưa
+kích hoạt (Unlicensed)” 1 = “Đã kích hoạt (Licensed)” 2 = “Thời gian ân
+hạn (OOB Grace)” 3 = “Thời gian gia hạn (OOT Grace)” 4 = “Hết hạn ân hạn
+phi bản quyền (Non-Genuine Grace)” 5 = “Trạng thái thông báo
+(Notification)” 6 = “Thời gian gia hạn mở rộng (Extended Grace)” }
+$winStatus = statusMap[[int]winLicObj.LicenseStatus] if (-not
+$winStatus) { $winStatus = “Chưa kích hoạt” }
+
+    # Xác định Kênh bản quyền từ Description
+    $desc = $winLicObj.Description
+    if ($desc -like "*RETAIL*") { $winChannel = "Retail Channel (Bán lẻ)" }
+    elseif ($desc -like "*OEM*") { $winChannel = "OEM Channel (Nhà sản xuất)" }
+    elseif ($desc -like "*VOLUME_MAK*") { $winChannel = "Volume:MAK (Khóa kích hoạt nhiều lần)" }
+    elseif ($desc -like "*VOLUME_KMS*") { 
+        $winChannel = "Volume:GVLK (KMS Client)" 
+        $winIsKMS = $true
+    } else {
+        $winChannel = "Volume Channel (Doanh nghiệp)"
+    }
+
+    # Đọc thông tin máy chủ KMS cấu hình trong WMI
+    if ($winLicObj.KeyManagementServiceMachine) {
+        $winKmsServer = $winLicObj.KeyManagementServiceMachine
+        $winKmsPort = $winLicObj.KeyManagementServicePort
+    }
+
+    # Kiểm tra KMS38 (KMS gia hạn đến 2038)
+    $winGraceMinutes = $winLicObj.GracePeriodRemaining
+    if ($winIsKMS -and $winGraceMinutes -gt 1000000) {
+        $winIsKMS38 = $true
+    }
+
+}
+
+Truy vấn thông tin Microsoft Office (nếu có)
+
+Bổ sung hỗ trợ Office 2021/2024 Retail và Microsoft 365 thông qua OSPP.VBS
+
+$officeProducts = @()
+# Lấy Office qua SoftwareLicensingProduct (ApplicationID của Office là 0ff1ce15-a989-479d-afc2-fb5b53c84000)$offLicObj
+= Get-CimInstance -ClassName SoftwareLicensingProduct -Filter
+“ApplicationID = ‘0ff1ce15-a989-479d-afc2-fb5b53c84000’ AND
+PartialProductKey IS NOT NULL” -ErrorAction SilentlyContinue if
+($offLicObj) {
+    foreach ($obj in $offLicObj) { statusText = if(obj.LicenseStatus
+-eq 1) { “Đã kích hoạt” } else { “Chưa kích hoạt” } $officeProducts +=
+[PSCustomObject]@{ Name = $obj.Name Status = $statusText Description =
+$obj.Description KmsServer = $obj.KeyManagementServiceMachine
+        }
+    }
+}
+# Lấy thêm qua OfficeSoftwareProtectionProduct (Office phiên bản cũ hơn)$offOspObj
+= Get-CimInstance -ClassName OfficeSoftwareProtectionProduct -Filter
+“PartialProductKey IS NOT NULL” -ErrorAction SilentlyContinue if
+($offOspObj) {
+    foreach ($obj in $offOspObj) { statusText = if(obj.LicenseStatus
+-eq 1) { “Đã kích hoạt” } else { “Chưa kích hoạt” } $officeProducts +=
+[PSCustomObject]@{ Name = $obj.Name Status = $statusText Description =
+$obj.Description KmsServer = $obj.KeyManagementServiceMachine } } }
+
+========================================================================
+
+3. QUÉT VÀ PHÁT HIỆN CÔNG CỤ CRACK (CRACK SCANNING LOGIC)
+
+========================================================================
+
+scanResults = @()domainJoined = (Get-CimInstance Win32_ComputerSystem
+-ErrorAction SilentlyContinue).PartOfDomain
+
+— CHECK 1: Cấu hình KMS Server trong Registry (Windows & Office) —
+
+$kmsRegWindows = ""$kmsRegOffice = “”
+
+Windows KMS Reg
+
+if (Test-Path “HKLM:NT”) { $kmsRegWindows = (Get-ItemProperty -Path
+“HKLM:NT” -Name “KeyManagementServiceServer” -ErrorAction
+SilentlyContinue).KeyManagementServiceServer } # Office KMS Reg if
+(Test-Path “HKLM:”) { $kmsRegOffice = (Get-ItemProperty -Path “HKLM:”
+-Name “KeyManagementServiceServer” -ErrorAction
+SilentlyContinue).KeyManagementServiceServer } if (-not $kmsRegOffice
+-and (Test-Path “HKLM:6432Node”)) { $kmsRegOffice = (Get-ItemProperty
+-Path “HKLM:6432Node” -Name “KeyManagementServiceServer” -ErrorAction
+SilentlyContinue).KeyManagementServiceServer }
+
+Hàm phân tích KMS Server
+
+function Analyze-KmsServer { param([string]server, [string]source) if
+($server -and $server.Trim() -ne ““) { $srv = $server.ToLower().Trim()
+        # Nếu là Localhost
+        if ($srv -eq”127.0.0.1” -or $srv -eq “localhost” -or
+$srv -eq "::1") {
+            return [PSCustomObject]@{
+                Name = "Máy chủ KMS trong Registry ($source)” Status =
+“CRACK” Details = “Phát hiện cấu hình máy chủ KMS nội bộ (loopback:
+$server). Đây là dấu hiệu của KMS Emulator cục bộ.” } } # Nếu không gia
+nhập Domain mà cấu hình KMS Server lạ if (-not $domainJoined) {
+            return [PSCustomObject]@{
+                Name = "Máy chủ KMS trong Registry ($source)” Status =
+“WARNING” Details = “Phát hiện cấu hình KMS Server từ xa
+($server) nhưng máy tính không thuộc Domain công ty. Rất có thể là KMS công cộng."
+            }
+        } else {
+            return [PSCustomObject]@{
+                Name = "Máy chủ KMS trong Registry ($source)” Status =
+“OK” Details = “Sử dụng máy chủ KMS doanh nghiệp
+($server) thông qua kết nối Domain chính chủ."
+            }
+        }
+    }
+    return [PSCustomObject]@{
+        Name = "Máy chủ KMS trong Registry ($source)” Status = “OK”
+Details = “Sạch (Không cấu hình máy chủ KMS ngoài)” } }
+
+$scanResults += Analyze-KmsServer -server
+$kmsRegWindows -source "Windows"$scanResults += Analyze-KmsServer
+-server $kmsRegOffice -source “Office”
+
+— CHECK 2: Kiểm tra KMS38 (Gia hạn kích hoạt tới năm 2038) —
+
+if ($winIsKMS38) { $scanResults += [PSCustomObject]@{ Name = “Kích hoạt
+dạng KMS38” Status = “CRACK” Details = “Phát hiện bản quyền kích hoạt
+bằng phương pháp hack KMS38 (Gia hạn thời gian dùng thử của KMS tới ngày
+19/01/2038, thời gian còn lại: $winGraceMinutes phút).” } } else {
+$scanResults += [PSCustomObject]@{ Name = “Kích hoạt dạng KMS38” Status
+= “OK” Details = “Sạch (Không phát hiện hack thời gian KMS38)” } }
+
+— CHECK 3: Kiểm tra tệp tin KMS Hook (DLL Hijack hệ thống) —
+
+$kmsHookDetected = falsehookDetails = “” $hookFiles = @(
+    "C:\Windows\System32\SppExtComObjHook.dll",
+    "C:\Windows\SppExtComObjHook.dll"
+)
+foreach ($file in $hookFiles) { if (Test-Path $file) { $sig =
+Get-AuthenticodeSignature -FilePath
+file − ErrorActionSilentlyContinueif(sig.Status -ne “Valid” -or
+$sig.SignerCertificate.Subject -notlike “Microsoft”) { $kmsHookDetected
+= $true $hookDetails += "Phát hiện tệp hook [$file] không có chữ ký số
+hợp lệ của Microsoft. ” } } }
+
+if ($kmsHookDetected) { $scanResults += [PSCustomObject]@{ Name = “Tệp
+tin KMS Hook hệ thống” Status = “CRACK” Details = $hookDetails } } else
+{ $scanResults += [PSCustomObject]@{ Name = “Tệp tin KMS Hook hệ thống”
+Status = “OK” Details = “Sạch (Không phát hiện file hook
+SppExtComObjHook.dll)” } }
+
+— CHECK 4: Kiểm tra tệp tin Office Ohook (DLL Hijack cho Office) —
+
+$ohookDetected = falseohookDetails = “” $officeSppcPaths = @(
+    "$env:ProgramFilesOffice.dll”,
+“${env:ProgramFiles(x86)}\Microsoft Office\root\vfs\System\sppc.dll"
+)
+foreach ($file in $officeSppcPaths) { if (Test-Path $file) { # Tập tin
+sppc.dll chỉ được nằm trong C:. # Việc nó xuất hiện trong thư mục cài
+đặt Microsoft Office là bất thường và là cách hoạt động của Ohook. $sig
+= Get-AuthenticodeSignature -FilePath
+file − ErrorActionSilentlyContinueif(sig.Status -ne”Valid” -or
+$sig.SignerCertificate.Subject -notlike “Microsoft”) { $ohookDetected =
+$true $ohookDetails += "Phát hiện tệp tin sppc.dll giả mạo tại [$file]
+(Không có chữ ký số của Microsoft). Đây là công cụ Ohook kích hoạt lậu
+Office.” } } }
+
+if ($ohookDetected) { $scanResults += [PSCustomObject]@{ Name = “Tệp tin
+Office Ohook (sppc.dll)” Status = “CRACK” Details = $ohookDetails } }
+else { $scanResults += [PSCustomObject]@{ Name = “Tệp tin Office Ohook
+(sppc.dll)” Status = “OK” Details = “Sạch (Không phát hiện tệp Ohook
+sppc.dll trong thư mục Office)” } }
+
+— CHECK 5: Kiểm tra Registry IFEO Chuyển hướng Debugger —
+
+$ifeoDetected = falseifeoDetails = “” $ifeoPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\SppExtComObj.exe",
+    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\osppsvc.exe"
+)
+foreach ($path in $ifeoPaths) { if (Test-Path $path) { $props =
+Get-ItemProperty -Path
+path − ErrorActionSilentlyContinueif(props.Debugger -or
+$props.VerifierDlls -or $props.MonitorProcess) { $ifeoDetected = $true
+val = if(props.Debugger) { “Debugger=” + $props.Debugger } else {
+“VerifierDlls=” + $props.VerifierDlls }
+$ifeoDetails += "Phát hiện cấu hình chuyển hướng tại [$(Split-Path $path
+-Leaf)]: $val. ” } } }
+
+if ($ifeoDetected) { $scanResults += [PSCustomObject]@{ Name = “Registry
+IFEO Hijack” Status = “CRACK” Details = $ifeoDetails + “Đây là kỹ thuật
+chiếm quyền kiểm soát tiến trình kích hoạt nhằm bẻ khóa bản quyền.” } }
+else { $scanResults += [PSCustomObject]@{ Name = “Registry IFEO Hijack”
+Status = “OK” Details = “Sạch (Không phát hiện khóa chuyển hướng tiến
+trình kích hoạt)” } }
+
+— CHECK 6: Kiểm tra Tác vụ tự động chạy (Scheduled Tasks ẩn) —
+
+detectedTasks = @()suspiciousTaskNames = @(“AutoKMS”, “KMSAuto”,
+“KMSConnectionMonitor”, “KMS-Activator”, “MAS_KMS”, “KMSeldi”)
+tasksList = Get − ScheduledTask − ErrorActionSilentlyContinueif(tasksList)
+{ foreach ($task in $tasksList) { $isMatch = falseforeach(name in
+$suspiciousTaskNames) {
+            if ($task.TaskName -like “$name”) { $isMatch = $true break }
+} if (-not $isMatch) { try { execStr = (task.Actions.Execute -join ”
+“).ToLower() foreach ($name in $suspiciousTaskNames) {
+                    if ($execStr -like”(name.ToLower())”) { $isMatch =
+$true
+                        break
+                    }
+                }
+            } catch {}
+        }
+        if ($isMatch) {
+$detectedTasks += "$(task.TaskPath)($task.TaskName)” } } }
+
+if ($detectedTasks.Count -gt 0) { $scanResults += [PSCustomObject]@{
+        Name = "Tác vụ ẩn gia hạn kích hoạt"
+        Status = "CRACK"
+        Details = "Phát hiện tác vụ tự động chạy của công cụ crack: " + ($detectedTasks
+-join “,”) } } else { $scanResults += [PSCustomObject]@{ Name = “Tác vụ
+ẩn gia hạn kích hoạt” Status = “OK” Details = “Sạch (Không phát hiện tác
+vụ tự động gia hạn KMS lậu)” } }
+
+— CHECK 7: Kiểm tra Dịch vụ Windows (Services) —
+
+detectedServices = @()suspiciousServices = @(“AutoKMS”, “KMSpico
+Service”, “KMSeldi”) foreach ($srvName in $suspiciousServices) { $srvObj
+= Get-Service -Name $srvName -ErrorAction SilentlyContinue if (-not
+$srvObj) { $srvObj = Get-Service -DisplayName
+$srvName -ErrorAction SilentlyContinue
+    }
+    if ($srvObj) {
+$detectedServices += "$(srvObj.Name)(($srvObj.Status))” } }
+
+if ($detectedServices.Count -gt 0) { $scanResults += [PSCustomObject]@{
+        Name = "Dịch vụ crack chạy ngầm"
+        Status = "CRACK"
+        Details = "Phát hiện dịch vụ bẻ khóa bản quyền: " + ($detectedServices
+-join “,”) } } else { $scanResults += [PSCustomObject]@{ Name = “Dịch vụ
+crack chạy ngầm” Status = “OK” Details = “Sạch (Không phát hiện dịch vụ
+bẻ khóa chạy ngầm)” } }
+
+========================================================================
+
+4. GIAO DIỆN HIỂN THỊ TƯƠNG TÁC PHÍM H
+
+========================================================================
+
+Hàm ẩn ký tự Key bản quyền
+
+function Mask-Key { param([string]key)if(key -eq “Không tìm thấy” -or
+$key -like “Không thể”) { return $key
+    }
+    # Nếu là key dạng BBBBB (Digital License) thì hiện đầy đủ vì nó là key mặc định không cần bảo mật
+    if ($key -like “BBBBB-BBBBB-BBBBB-BBBBB-BBBBB*“) { return $key
+    }
+    if ($key.Length -eq 29) { return”XXXXX-XXXXX-XXXXX-XXXXX-” +
+$key.Substring(24, 5) } return “XXXXX-XXXXX-XXXXX-XXXXX-XXXXX” }
+
+Trạng thái ẩn/hiện mặc định là ẨN (False)
+
+$showKeys = $false
+
+Vòng lặp giao diện tương tác
+
+while ($true) { Clear-Host
+
+    # Tiêu đề
+    Write-Host "========================================================================" -ForegroundColor Gray
+    Write-Host "   ____ _               _     ____                 _      " -ForegroundColor Cyan
+    Write-Host "  / ___| |__   ___  ___| | __/ ___|_ __ __ _  ___| | __  " -ForegroundColor Cyan
+    Write-Host " | |   | '_ \ / _ \/ __| |/ / |   | '__/ _` |/ __| |/ /  " -ForegroundColor Cyan
+    Write-Host " | |___| | | |  __/ (__|   <| |___| | | (_| | (__|   <   " -ForegroundColor Cyan
+    Write-Host "  \____|_| |_|\___|\___|_|\_\\____|_|  \__,_|\___|_|\_\  " -ForegroundColor Cyan
+    Write-Host "                                                         " -ForegroundColor Cyan
+    Write-Host "  CÔNG CỤ KIỂM TRA CRACK & BẢN QUYỀN WINDOWS/OFFICE v1.0" -ForegroundColor White
+    Write-Host "                 Developed by Le Minh Khoi"               -ForegroundColor White
+    Write-Host "========================================================================" -ForegroundColor Gray
+    Write-Host ""
+
+    # I. THÔNG TIN PHẦN CỨNG
+    Write-Host "[I. THÔNG TIN PHẦN CỨNG MÁY TÍNH]" -ForegroundColor Cyan
+    Write-Host "  • Mainboard   : " -NoNewline; Write-Host $motherboard -ForegroundColor White
+    Write-Host "  • Bộ vi xử lý : " -NoNewline; Write-Host "$cpuName ($cpuCores cores, $cpuThreads threads)" -ForegroundColor White
+    Write-Host "  • Bộ nhớ RAM  : " -NoNewline; Write-Host "$ramTotalGB GB (Tốc độ tối đa: $ramSpeed MHz, $ramSlots thanh cắm)" -ForegroundColor White
+    Write-Host "  • Card đồ họa : " -NoNewline; Write-Host $gpuStr -ForegroundColor White
+    Write-Host "  • Ổ lưu trữ   : " -NoNewline; Write-Host $diskStr -ForegroundColor White
+    Write-Host ""
+
+    # II. THÔNG TIN BẢN QUYỀN HỆ THỐNG
+    Write-Host "[II. THÔNG TIN BẢN QUYỀN HỆ THỐNG]" -ForegroundColor Cyan
+    Write-Host "  • Phiên bản Windows   : " -NoNewline; Write-Host $winEdition -ForegroundColor White
+    Write-Host "  • Trạng thái kích hoạt: " -NoNewline
+    if ($winStatus -like "*Đã kích hoạt*") {
+        Write-Host $winStatus -ForegroundColor Green
+    } else {
+        Write-Host $winStatus -ForegroundColor Red
+    }
+    Write-Host "  • Kênh phân phối bản quyền: " -NoNewline; Write-Host $winChannel -ForegroundColor White
+
+    # Cấu hình Key ẩn / hiện
+    $displayOemKey = if ($showKeys) { $oemKey } else { Mask-Key $oemKey }
+    $displayRegKey = if ($showKeys) { $registryKey } else { Mask-Key $registryKey }
+
+    Write-Host "  • Product Key (BIOS OEM)  : " -NoNewline
+    if ($oemKey -eq "Không tìm thấy") {
+        Write-Host $displayOemKey -ForegroundColor DarkGray
+    } else {
+        Write-Host $displayOemKey -ForegroundColor Yellow
+    }
+    Write-Host "  • Product Key (Registry)  : " -NoNewline
+    if ($registryKey -like "*Không thể*") {
+        Write-Host $displayRegKey -ForegroundColor DarkGray
+    } else {
+        Write-Host $displayRegKey -ForegroundColor Yellow
+    }
+
+    # Office
+    if ($officeProducts.Count -gt 0) {
+        Write-Host "  • Bản quyền MS Office : " -ForegroundColor Cyan
+        foreach ($off in $officeProducts) {
+            Write-Host "    - $($off.Name) : " -NoNewline
+            if ($off.Status -eq "Đã kích hoạt") {
+                Write-Host $off.Status -ForegroundColor Green -NoNewline
+            } else {
+                Write-Host $off.Status -ForegroundColor Red -NoNewline
+            }
+            if ($off.KmsServer) {
+                Write-Host " (Thông qua KMS: $($off.KmsServer))" -ForegroundColor Yellow
+            } else {
+                Write-Host " (Kênh chính chủ)" -ForegroundColor Gray
+            }
+        }
+    } else {
+        Write-Host "  • Bản quyền MS Office : " -NoNewline; Write-Host "Không phát hiện bản cài Office có bản quyền trên máy" -ForegroundColor DarkGray
+    }
+    Write-Host ""
+
+    # III. KẾT QUẢ QUÉT CÔNG CỤ CRACK
+    Write-Host "[III. KẾT QUẢ QUÉT CÔNG CỤ CRACK / HACKTOOL]" -ForegroundColor Cyan
+    $crackDetectedList = @()
+    $warningDetectedList = @()
+
+    foreach ($res in $scanResults) {
+        Write-Host "  " -NoNewline
+        if ($res.Status -eq "OK") {
+            Write-Host "[ SẠCH ] " -ForegroundColor Green -NoNewline
+            Write-Host "$($res.Name): $($res.Details)" -ForegroundColor White
+        } elseif ($res.Status -eq "WARNING") {
+            Write-Host "[ CẢNH BÁO ] " -ForegroundColor Yellow -NoNewline
+            Write-Host "$($res.Name): $($res.Details)" -ForegroundColor Yellow
+            $warningDetectedList += $res
+        } else {
+            Write-Host "[ PHÁT HIỆN ] " -ForegroundColor Red -NoNewline
+            Write-Host "$($res.Name): $($res.Details)" -ForegroundColor Red
+            $crackDetectedList += $res
+        }
+    }
+    Write-Host ""
+
+    # IV. KẾT LUẬN CHUNG
+    Write-Host "[IV. KẾT LUẬN CHUNG]" -ForegroundColor Cyan
+    Write-Host "  " -NoNewline
+    if ($crackDetectedList.Count -gt 0) {
+        Write-Host "==========================================================================" -ForegroundColor Red
+        Write-Host "  KẾT LUẬN: HỆ THỐNG KHÔNG AN TOÀN! PHÁT HIỆN CÓ DẤU HIỆU CÀI ĐẶT CRACK." -ForegroundColor Red
+        Write-Host "  Các mối nguy hại được phát hiện:" -ForegroundColor Red
+        foreach ($crk in $crackDetectedList) {
+            Write-Host "  - $($crk.Name): $($crk.Details)" -ForegroundColor Red
+        }
+        Write-Host "  => Khuyên dùng: Gỡ bỏ các công cụ này và mua bản quyền chính hãng để đảm bảo an toàn." -ForegroundColor Yellow
+        Write-Host "==========================================================================" -ForegroundColor Red
+    } elseif ($warningDetectedList.Count -gt 0) {
+        Write-Host "==========================================================================" -ForegroundColor Yellow
+        Write-Host "  KẾT LUẬN: CÓ CẢNH BÁO. KHÔNG PHÁT HIỆN TRỰC TIẾP FILE CRACK HOẶC HOOK." -ForegroundColor Yellow
+        Write-Host "  Tuy nhiên, hệ thống cấu hình máy chủ KMS bên ngoài không rõ nguồn gốc." -ForegroundColor Yellow
+        Write-Host "  Kiểm tra xem máy tính này có thuộc sở hữu của doanh nghiệp/trường học không." -ForegroundColor White
+        Write-Host "==========================================================================" -ForegroundColor Yellow
+    } else {
+        Write-Host "==========================================================================" -ForegroundColor Green
+        Write-Host "  KẾT LUẬN: HỆ THỐNG SẠCH / BẢN QUYỀN HỢP LỆ." -ForegroundColor Green
+        # Thêm phân tích chi tiết về bản quyền sạch
+        if ($winStatus -like "*Đã kích hoạt*") {
+            if ($winChannel -like "*Retail*" -and $registryKey -like "BBBBB-BBBBB-BBBBB-BBBBB-BBBBB*") {
+                Write-Host "  - Windows kích hoạt hợp lệ bằng Bản quyền số (Digital License) liên kết phần cứng." -ForegroundColor Green
+                Write-Host "    (Kịch bản kích hoạt sạch của MAS HWID hoặc nâng cấp từ Win 7/8 chính thức)." -ForegroundColor Gray
+            } else {
+                Write-Host "  - Windows kích hoạt hợp lệ thông qua kênh chính thống ($winChannel)." -ForegroundColor Green
+            }
+        } else {
+            Write-Host "  - Hệ thống an toàn (không có file crack), tuy nhiên Windows chưa được kích hoạt." -ForegroundColor Yellow
+        }
+        Write-Host "==========================================================================" -ForegroundColor Green
+    }
+    Write-Host ""
+
+    # Hướng dẫn thao tác phím nóng
+    Write-Host "  [ H ] Ẩn/Hiện Product Key  |  [ Q hoặc ESC ] Thoát chương trình" -ForegroundColor Cyan
+    Write-Host "------------------------------------------------------------------------" -ForegroundColor Gray
+
+    # Đọc phím bấm không hiển thị lên màn hình (hoặc tự động đổi trạng thái nếu đang ở chế độ test)
+    if ($testMode) {
+        if (-not $showKeys) {
+            $showKeys = $true
+            Start-Sleep -Milliseconds 300
+            continue
+        } else {
+            break
+        }
+    }
+
+    $key = [Console]::ReadKey($true)
+    if ($key.Key -eq 'H') {
+        $showKeys = -not $showKeys
+    } elseif ($key.Key -eq 'Q' -or $key.Key -eq 'Escape') {
+        break
+    }
+
+}
+
+Trả lại mã hóa ban đầu của console khi thoát
+
+Write-Host “Đã thoát chương trình. Cảm ơn bạn đã sử dụng!”
+-ForegroundColor Green
